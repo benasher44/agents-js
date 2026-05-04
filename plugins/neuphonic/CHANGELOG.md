@@ -1,5 +1,12 @@
 # @livekit/agents-plugin-neuphonic
 
+## 1.4.0
+
+### Patch Changes
+
+- Updated dependencies [[`87e7f34ac35a0a5dfc3f904b3632468249876844`](https://github.com/livekit/agents-js/commit/87e7f34ac35a0a5dfc3f904b3632468249876844), [`5898229d387c72691d791d34901aad2a12877d94`](https://github.com/livekit/agents-js/commit/5898229d387c72691d791d34901aad2a12877d94)]:
+  - @livekit/agents@1.4.0
+
 ## 1.3.2
 
 ### Patch Changes

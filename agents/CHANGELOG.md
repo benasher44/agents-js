@@ -1,5 +1,17 @@
 # @livekit/agents
 
+## 1.4.0
+
+### Minor Changes
+
+- feat(stt): add FakeSTT test harness for FallbackAdapter - [#1288](https://github.com/livekit/agents-js/pull/1288) ([@drain-zine](https://github.com/drain-zine))
+
+### Patch Changes
+
+- Harden RecorderIO teardown by fencing writes before channel closure and stopping - [#1378](https://github.com/livekit/agents-js/pull/1378) ([@toubatbrian](https://github.com/toubatbrian))
+  the forward task first, preventing repeated closed WritableStream write errors on disconnect.
+  Also centralize writable-stream closed error detection in utils and add regression tests.
+
 ## 1.3.2
 
 ### Patch Changes
