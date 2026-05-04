@@ -148,4 +148,76 @@ describe('AMD', () => {
     await expect(promise).rejects.toThrow('AMD closed');
     expect(session.resumeReplyAuthorization).toHaveBeenCalled();
   });
+
+  // Ref: python tests/test_amd_classifier.py (PR #5637) — late STT transcripts
+  // arriving inside the short-speech window must cancel the pre-baked HUMAN /
+  // short_greeting timer and let the LLM verify with the long_speech budget.
+  it('should not fire short_greeting when a transcript arrives late', async () => {
+    const session = new MockSession();
+    const llm = new StaticLLM(
+      JSON.stringify({ category: AMDCategory.HUMAN, reason: 'llm-verified' }),
+    );
+    llm.on('error', () => {});
+    const amd = new AMD(asAgentSession(session), { llm, detectionTimeoutMs: 5_000 });
+
+    const promise = amd.execute();
+    const t0 = Date.now();
+
+    session.emit(AgentSessionEventTypes.UserStateChanged, {
+      type: 'user_state_changed',
+      oldState: 'listening',
+      newState: 'speaking',
+      createdAt: t0,
+    });
+    session.emit(AgentSessionEventTypes.UserStateChanged, {
+      type: 'user_state_changed',
+      oldState: 'speaking',
+      newState: 'listening',
+      createdAt: t0 + 100,
+    });
+
+    // Transcript arrives 200ms after speech end, well inside the 500ms HUMAN
+    // silence window. Without the fix this would race the short_greeting timer.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    session.emit(AgentSessionEventTypes.UserInputTranscribed, {
+      type: 'user_input_transcribed',
+      transcript: 'hello there',
+      isFinal: true,
+      speakerId: null,
+      createdAt: Date.now(),
+      language: null,
+    });
+
+    const result = await promise;
+    expect(result.category).toBe(AMDCategory.HUMAN);
+    expect(result.reason).toBe('llm-verified');
+    expect(result.transcript).toBe('hello there');
+  }, 5_000);
+
+  it('should still fire short_greeting when no transcript arrives', async () => {
+    const session = new MockSession();
+    const llm = new StaticLLM(JSON.stringify({ category: AMDCategory.HUMAN, reason: 'unused' }));
+    llm.on('error', () => {});
+    const amd = new AMD(asAgentSession(session), { llm, detectionTimeoutMs: 5_000 });
+
+    const promise = amd.execute();
+    const t0 = Date.now();
+
+    session.emit(AgentSessionEventTypes.UserStateChanged, {
+      type: 'user_state_changed',
+      oldState: 'listening',
+      newState: 'speaking',
+      createdAt: t0,
+    });
+    session.emit(AgentSessionEventTypes.UserStateChanged, {
+      type: 'user_state_changed',
+      oldState: 'speaking',
+      newState: 'listening',
+      createdAt: t0 + 100,
+    });
+
+    const result = await promise;
+    expect(result.category).toBe(AMDCategory.HUMAN);
+    expect(result.reason).toBe('short_greeting');
+  }, 5_000);
 });

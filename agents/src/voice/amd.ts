@@ -95,11 +95,15 @@ export class AMD {
   private verdictResult: AMDResult | undefined;
   private machineSilenceReached = false;
   private speechStartedAt: number | undefined;
+  private speechEndedAt: number | undefined;
   private detectGeneration = 0;
 
   private noSpeechTimer: ReturnType<typeof setTimeout> | undefined;
   private detectionTimer: ReturnType<typeof setTimeout> | undefined;
   private silenceTimer: ReturnType<typeof setTimeout> | undefined;
+  // Ref: python classifier.py `_silence_timer_trigger` — tags the active silence
+  // timer so push_text can decide whether to cancel-and-replace it.
+  private silenceTimerTrigger: 'short_speech' | 'long_speech' | undefined;
 
   private resolveRun: ((value: AMDResult) => void) | undefined;
   private rejectRun: ((reason?: unknown) => void) | undefined;
@@ -181,6 +185,8 @@ export class AMD {
     this.verdictResult = undefined;
     this.machineSilenceReached = false;
     this.speechStartedAt = undefined;
+    this.speechEndedAt = undefined;
+    this.silenceTimerTrigger = undefined;
     this.detectGeneration = 0;
     this.resolveRun = undefined;
     this.rejectRun = undefined;
@@ -211,6 +217,9 @@ export class AMD {
     if (this[key]) {
       clearTimeout(this[key]);
       this[key] = undefined;
+    }
+    if (name === 'silence') {
+      this.silenceTimerTrigger = undefined;
     }
   }
 
@@ -258,6 +267,11 @@ export class AMD {
    * short-greeting paths) and always opens the silence gate.
    */
   private onSilenceTimerFired(category?: AMDCategory, reason?: string): void {
+    // Ref: python classifier.py `_silence_timer_callback` (PR #5637) — clears
+    // the timer handle/trigger so push_text doesn't see a stale 'short_speech'
+    // tag after the timer has already fired.
+    this.silenceTimer = undefined;
+    this.silenceTimerTrigger = undefined;
     if (category && reason && !this.verdictResult) {
       this.setVerdict({
         category,
@@ -305,6 +319,7 @@ export class AMD {
     }
 
     const speechDurationMs = ev.createdAt - (this.speechStartedAt ?? ev.createdAt);
+    this.speechEndedAt = ev.createdAt;
 
     this.clearTimer('silence');
 
@@ -314,11 +329,13 @@ export class AMD {
         () => this.onSilenceTimerFired(AMDCategory.HUMAN, 'short_greeting'),
         HUMAN_SILENCE_THRESHOLD_MS,
       );
+      this.silenceTimerTrigger = 'short_speech';
       return;
     }
 
     // Longer speech: open silence gate after 1.5s of quiet
     this.silenceTimer = setTimeout(() => this.onSilenceTimerFired(), MACHINE_SILENCE_THRESHOLD_MS);
+    this.silenceTimerTrigger = 'long_speech';
   };
 
   /**
@@ -332,6 +349,24 @@ export class AMD {
     const transcript = ev.transcript.trim();
     if (!transcript) {
       return;
+    }
+
+    // Ref: python classifier.py `push_text` (PR #5637) — a transcript arriving
+    // inside the short-speech window must cancel the pre-baked HUMAN/short_greeting
+    // timer and replace it with a long_speech timer anchored at speechEndedAt +
+    // MACHINE_SILENCE_THRESHOLD_MS, so the LLM gets a chance to verify.
+    if (this.silenceTimer && this.silenceTimerTrigger === 'short_speech') {
+      this.clearTimer('silence');
+      // Invariant: trigger === 'short_speech' implies speechEndedAt is set (the
+      // short_speech timer is only armed when a speech-ended transition fires).
+      if (this.speechEndedAt !== undefined) {
+        const remaining = Math.max(
+          0,
+          this.speechEndedAt + MACHINE_SILENCE_THRESHOLD_MS - Date.now(),
+        );
+        this.silenceTimer = setTimeout(() => this.onSilenceTimerFired(), remaining);
+        this.silenceTimerTrigger = 'long_speech';
+      }
     }
 
     this.clearTimer('noSpeech');
